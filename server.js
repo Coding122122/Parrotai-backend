@@ -9,9 +9,25 @@ const path     = require("path");
 const fs       = require("fs");
 const rateLimit = require("express-rate-limit");
 const PORT       = process.env.PORT || 5000;
-const JWT_EXP    = process.env.JWT_EXPIRES_IN || "7d";
+const JWT_EXP = process.env.JWT_EXPIRES_IN || "1h";
 const DB_PATH    = path.resolve(__dirname, process.env.DB_PATH || "./db/parrotai.db");
 const xss = require('xss');
+const winston = require('winston');
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' })
+  ]
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple()
+  }));
+}
 // ── DB bootstrap ──────────────────────────────────
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -32,6 +48,15 @@ db.exec(`
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000", credentials: true }));
+// ── HTTPS REDIRECT (Production only) ───────────────
+if(process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.header('x-forwarded-proto') !== 'https') {
+      return res.redirect(`https://${req.header('host')}${req.url}`);
+    }
+    next();
+  });
+}
 // ── RATE LIMITING ──────────────────────────────────
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -74,19 +99,22 @@ app.post("/api/auth/register", registerLimiter, async (req,res)=>{
     if(!/^[a-zA-Z0-9\s\-']+$/.test(name)) {
       return res.status(400).json({ok:false,message:"Name can only contain letters, numbers, spaces, hyphens, and apostrophes."});
     }
-    
+    // ── INPUT LENGTH VALIDATION ────────────────────────
+if(name.length > 100) return res.status(400).json({ok:false,message:"Name is too long (max 100 characters)."});
+if(email.length > 255) return res.status(400).json({ok:false,message:"Email is too long (max 255 characters)."});
+if(password.length > 128) return res.status(400).json({ok:false,message:"Password is too long (max 128 characters)."});
     if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ok:false,message:"Valid email required."});
     if(!password||password.length<6)   return res.status(400).json({ok:false,message:"Password must be at least 6 characters."});
 
     const em = email.toLowerCase().trim();
     if(db.prepare("SELECT id FROM users WHERE email=?").get(em))
-      return res.status(409).json({ok:false,message:"Email already registered."});
+  return res.status(400).json({ok:false,message:"Invalid name, email, or password."});
 
     const now  = new Date().toISOString();
     const user = { id:uuid(), name:name, email:em, password_hash:await bcrypt.hash(password,12), avatar_color:pick(COLORS), created_at:now, last_login:now };
     db.prepare("INSERT INTO users VALUES(:id,:name,:email,:password_hash,:avatar_color,:created_at,:last_login)").run(user);
     res.status(201).json({ok:true, message:"Account created.", token:sign(user), user:safe(user)});
-  } catch(e){ console.error(e); res.status(500).json({ok:false,message:"Server error."}); }
+  } catch(e){ logger.error(e); res.status(500).json({ok:false,message:"Server error."}); }
 });
 
 // ── LOGIN ─────────────────────────────────────────

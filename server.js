@@ -119,8 +119,30 @@ app.post("/api/auth/register", registerLimiter, async (req,res)=>{
     if(!password||password.length<6)   return res.status(400).json({ok:false,message:"Password must be at least 6 characters."});
 
     const em = email.toLowerCase().trim();
-    if(db.prepare("SELECT id FROM users WHERE email=?").get(em))
-      return res.status(400).json({ok:false,message:"Invalid name, email, or password."});
+db.get("SELECT id FROM users WHERE email=?", [em], async (err, row) => {
+  if (err) {
+    logger.error(err);
+    return res.status(500).json({ok:false,message:"Server error."});
+  }
+  if (row) {
+    return res.status(400).json({ok:false,message:"Invalid name, email, or password."});
+  }
+  
+  const now  = new Date().toISOString();
+  const passwordHash = await bcrypt.hash(password, 12);
+  const user = { id:uuid(), name:name, email:em, password_hash:passwordHash, avatar_color:pick(COLORS), created_at:now, last_login:now };
+  
+  db.run("INSERT INTO users (id,name,email,password_hash,avatar_color,created_at,last_login) VALUES (?,?,?,?,?,?,?)", 
+    [user.id, user.name, user.email, user.password_hash, user.avatar_color, user.created_at, user.last_login],
+    function(err) {
+      if (err) {
+        logger.error(err);
+        return res.status(500).json({ok:false,message:"Server error."});
+      }
+      res.status(201).json({ok:true, message:"Account created.", token:sign(user), user:safe(user)});
+    }
+  );
+});
 
     const now  = new Date().toISOString();
     const user = { id:uuid(), name:name, email:em, password_hash:await bcrypt.hash(password,12), avatar_color:pick(COLORS), created_at:now, last_login:now };

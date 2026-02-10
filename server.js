@@ -156,12 +156,23 @@ app.post("/api/auth/login", loginLimiter, async (req,res)=>{
   try {
     const {email,password} = req.body;
     if(!email||!password) return res.status(400).json({ok:false,message:"Email and password required."});
-    const user = db.prepare("SELECT * FROM users WHERE email=?").get((email||"").toLowerCase().trim());
-    if(!user||!(await bcrypt.compare(password, user.password_hash)))
-      return res.status(401).json({ok:false,message:"Invalid email or password."});
-    db.prepare("UPDATE users SET last_login=? WHERE id=?").run(new Date().toISOString(), user.id);
-    user.last_login = new Date().toISOString();
+    const em = (email||"").toLowerCase().trim();
+db.get("SELECT * FROM users WHERE email=?", [em], async (err, user) => {
+  if (err) {
+    logger.error(err);
+    return res.status(500).json({ok:false,message:"Server error."});
+  }
+  if(!user || !(await bcrypt.compare(password, user.password_hash))) {
+    return res.status(401).json({ok:false,message:"Invalid email or password."});
+  }
+  
+  const now = new Date().toISOString();
+  db.run("UPDATE users SET last_login=? WHERE id=?", [now, user.id], (err) => {
+    if (err) logger.error(err);
+    user.last_login = now;
     res.json({ok:true, token:sign(user), user:safe(user)});
+  });
+});
   } catch(e){ logger.error(e); res.status(500).json({ok:false,message:"Server error."}); }
 });
 

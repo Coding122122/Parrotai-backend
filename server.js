@@ -178,9 +178,14 @@ db.get("SELECT * FROM users WHERE email=?", [em], async (err, user) => {
 
 // ── ME (protected) ────────────────────────────────
 app.get("/api/auth/me", authGuard, (req,res)=>{
-  const u = db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
-  if(!u) return res.status(404).json({ok:false,message:"Not found."});
-  res.json({ok:true, user:safe(u)});
+  db.get("SELECT * FROM users WHERE id=?", [req.user.id], (err, user) => {
+    if (err) {
+      logger.error(err);
+      return res.status(500).json({ok:false,message:"Server error."});
+    }
+    if(!user) return res.status(404).json({ok:false,message:"Not found."});
+    res.json({ok:true, user:safe(user)});
+  });
 });
 
 // ── HEALTH ────────────────────────────────────────

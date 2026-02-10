@@ -8,11 +8,13 @@ const Database = require("better-sqlite3");
 const path     = require("path");
 const fs       = require("fs");
 const rateLimit = require("express-rate-limit");
-const PORT       = process.env.PORT || 5000;
-const JWT_EXP = process.env.JWT_EXPIRES_IN || "1h";
-const DB_PATH    = path.resolve(__dirname, process.env.DB_PATH || "./db/parrotai.db");
 const xss = require('xss');
 const winston = require('winston');
+
+const PORT       = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || "IAmJim33mya55nd54Iliket75urtl87es39743";
+const JWT_EXP    = process.env.JWT_EXPIRES_IN || "1h";
+const DB_PATH    = path.resolve(__dirname, process.env.DB_PATH || "./db/parrotai.db");
 
 const logger = winston.createLogger({
   level: 'info',
@@ -28,6 +30,7 @@ if (process.env.NODE_ENV !== 'production') {
     format: winston.format.simple()
   }));
 }
+
 // ── DB bootstrap ──────────────────────────────────
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -48,6 +51,7 @@ db.exec(`
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000", credentials: true }));
+
 // ── HTTPS REDIRECT (Production only) ───────────────
 if(process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
@@ -57,6 +61,7 @@ if(process.env.NODE_ENV === 'production') {
     next();
   });
 }
+
 // ── RATE LIMITING ──────────────────────────────────
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -74,6 +79,7 @@ const registerLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
 });
+
 // ── helpers ───────────────────────────────────────
 const COLORS = ["#2ec4b6","#38c878","#fb8500","#ffb703","#e63946","#457b9d","#a8e6a3","#f5c542"];
 const pick   = a => a[Math.floor(Math.random()*a.length)];
@@ -92,23 +98,25 @@ app.post("/api/auth/register", registerLimiter, async (req,res)=>{
   try {
     let {name,email,password} = req.body;
     
-    // ← SANITIZE NAME (Step 3 Option 3)
+    // ← SANITIZE NAME
     name = name.trim();
     if(!name||name.length<2) return res.status(400).json({ok:false,message:"Name must be at least 2 characters."});
     // Only allow letters, numbers, spaces, hyphens, apostrophes
     if(!/^[a-zA-Z0-9\s\-']+$/.test(name)) {
       return res.status(400).json({ok:false,message:"Name can only contain letters, numbers, spaces, hyphens, and apostrophes."});
     }
+    
     // ── INPUT LENGTH VALIDATION ────────────────────────
-if(name.length > 100) return res.status(400).json({ok:false,message:"Name is too long (max 100 characters)."});
-if(email.length > 255) return res.status(400).json({ok:false,message:"Email is too long (max 255 characters)."});
-if(password.length > 128) return res.status(400).json({ok:false,message:"Password is too long (max 128 characters)."});
+    if(name.length > 100) return res.status(400).json({ok:false,message:"Name is too long (max 100 characters)."});
+    if(email.length > 255) return res.status(400).json({ok:false,message:"Email is too long (max 255 characters)."});
+    if(password.length > 128) return res.status(400).json({ok:false,message:"Password is too long (max 128 characters)."});
+    
     if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ok:false,message:"Valid email required."});
     if(!password||password.length<6)   return res.status(400).json({ok:false,message:"Password must be at least 6 characters."});
 
     const em = email.toLowerCase().trim();
     if(db.prepare("SELECT id FROM users WHERE email=?").get(em))
-  return res.status(400).json({ok:false,message:"Invalid name, email, or password."});
+      return res.status(400).json({ok:false,message:"Invalid name, email, or password."});
 
     const now  = new Date().toISOString();
     const user = { id:uuid(), name:name, email:em, password_hash:await bcrypt.hash(password,12), avatar_color:pick(COLORS), created_at:now, last_login:now };
@@ -119,6 +127,17 @@ if(password.length > 128) return res.status(400).json({ok:false,message:"Passwor
 
 // ── LOGIN ─────────────────────────────────────────
 app.post("/api/auth/login", loginLimiter, async (req,res)=>{
+  try {
+    const {email,password} = req.body;
+    if(!email||!password) return res.status(400).json({ok:false,message:"Email and password required."});
+    const user = db.prepare("SELECT * FROM users WHERE email=?").get((email||"").toLowerCase().trim());
+    if(!user||!(await bcrypt.compare(password, user.password_hash)))
+      return res.status(401).json({ok:false,message:"Invalid email or password."});
+    db.prepare("UPDATE users SET last_login=? WHERE id=?").run(new Date().toISOString(), user.id);
+    user.last_login = new Date().toISOString();
+    res.json({ok:true, token:sign(user), user:safe(user)});
+  } catch(e){ logger.error(e); res.status(500).json({ok:false,message:"Server error."}); }
+});
 
 // ── ME (protected) ────────────────────────────────
 app.get("/api/auth/me", authGuard, (req,res)=>{

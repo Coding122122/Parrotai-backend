@@ -33,19 +33,23 @@ if (process.env.NODE_ENV !== 'production') {
 
 // ── DB bootstrap ──────────────────────────────────
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    avatar_color  TEXT DEFAULT '#2ec4b6',
-    created_at    TEXT DEFAULT (datetime('now')),
-    last_login    TEXT
-  );
-`);
+const db = new sqlite3.Database(DB_PATH, (err) => {
+  if (err) logger.error('Database connection error:', err);
+});
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      email         TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      avatar_color  TEXT DEFAULT '#2ec4b6',
+      created_at    TEXT DEFAULT (datetime('now')),
+      last_login    TEXT
+    );
+  `);
+});
 
 // ── app ───────────────────────────────────────────
 const app = express();
